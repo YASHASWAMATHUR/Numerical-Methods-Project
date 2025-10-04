@@ -1,33 +1,31 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from scipy.optimize import minimize, differential_evolution
+from scipy.optimize import minimize
 from scipy.interpolate import interp1d
-import pandas as pd
 from dataclasses import dataclass
 from typing import List, Tuple, Dict
-import json
 
 @dataclass
 class DwellPosition:
-    """Represents a dwell position in a catheter"""
-    x: float  # mm
-    y: float  # mm  
-    z: float  # mm
+    """datacontainer for dwell position in a catheter"""
+    x: float  # mm units
+    y: float  # mm units
+    z: float  # mm units
     channel: int
     position_number: int
 
 @dataclass
 class SourceData:
-    """TG-43 source specification data for Ir-192"""
-    air_kerma_strength: float  # U (micro Gy m^2/h)
-    dose_rate_constant: float  # Lambda (cGy/h/U)
-    radial_dose_function_data: Dict  # g(r) vs r
-    anisotropy_function_data: Dict   # F(r,theta) vs r,theta
+    """datacontainer for TG-43 source specification data for Ir-192"""
+    air_kerma_strength: float  # U (micro Gy m^2/h) units
+    dose_rate_constant: float  # Lambda (cGy/h/U) units
+    radial_dose_function_data: Dict  # g(r) vs r units
+    anisotropy_function_data: Dict   # F(r,theta) vs r,theta units
 
 class TG43DoseCalculator:
     """Implementation of AAPM TG-43 dose calculation formalism"""
 
     def __init__(self, source_data: SourceData):
+        #setting up self data
         self.source_data = source_data
         self.setup_interpolators()
 
@@ -35,75 +33,82 @@ class TG43DoseCalculator:
         """Setup interpolation functions for TG-43 parameters"""
         r_values = np.array(list(self.source_data.radial_dose_function_data.keys()))
         g_values = np.array(list(self.source_data.radial_dose_function_data.values()))
+        #setting up linear interpolator functions for self
         self.radial_dose_interp = interp1d(r_values, g_values, kind='linear', bounds_error=False, fill_value=(g_values[0], g_values[-1]))
 
         theta_values = np.array(list(self.source_data.anisotropy_function_data.keys()))
         f_values = np.array(list(self.source_data.anisotropy_function_data.values()))
         self.anisotropy_interp = interp1d(theta_values, f_values, kind='linear', bounds_error=False, fill_value=(f_values[0], f_values[-1]))
-
+    
     def geometry_function(self, r: float, theta: float, L: float = 3.5) -> float:
-        """
-        Calculate geometry function G(r,theta) for line source
-        L: active length of source (mm) - typical 3.5mm for Ir-192
-        """
+        #Calculate geometry function G(r,theta) for line source
+        #L: active length of source (mm) - typical 3.5mm for Ir-192
+        #convert into cm 
         L_cm = L / 10.0
         r_cm = r / 10.0
 
         if abs(theta) < 1 or abs(theta - 180) < 1: 
-            return 1.0 / (r_cm * r_cm - L_cm * L_cm / 4.0) if r_cm > L_cm/2 else 1.0 / (r_cm * r_cm)
+            if r_cm > L_cm/2 :
+                return 1.0 / (r_cm * r_cm - L_cm * L_cm / 4.0)
+            else :
+                return 1.0 / (r_cm * r_cm)
         else:
-
             return 1.0 / (r_cm * r_cm)
 
     def radial_dose_function(self, r: float) -> float:
-        """Get radial dose function g(r) value"""
+        #to obtain radial dose function g(r) valuem for a specified r value
         r_cm = r / 10.0
         return float(self.radial_dose_interp(r_cm))
 
     def anisotropy_function(self, r: float, theta: float) -> float:
-        """Get anisotropy function F(r,theta) value"""
+        #Get anisotropy function F(r,theta) value
         theta = abs(theta) % 180
         return float(self.anisotropy_interp(theta))
 
     def calculate_dose_rate(self, dwell_pos: DwellPosition, calc_point: Tuple[float, float, float]) -> float:
-        """
-        Calculate dose rate at calculation point from single dwell position
-        Using TG-43 formalism: D_rate = S_k * Lambda * G(r,theta) * g(r) * F(r,theta)
-        """
+        #final calculation of dose rate at calculation point from single dwell position using TG-43 formalism function : D_rate = S_k * Lambda * G(r,theta) * g(r) * F(r,theta)
+
+        #defining dwell position 
         dx = calc_point[0] - dwell_pos.x
         dy = calc_point[1] - dwell_pos.y
         dz = calc_point[2] - dwell_pos.z
 
+        #defining radial value wrt current dwell position
         r = np.sqrt(dx*dx + dy*dy + dz*dz)
-
-        if r < 2.0:
+        if r < 2.0: #bounding the max value for the dwell position
             r = 2.0
-            
-        theta = np.degrees(np.arccos(abs(dz) / r)) if r > 0 else 90
 
+        #calculating the theta angle, (from the given dwell position)
+        if r > 0 :
+            theta = np.degrees(np.arccos(abs(dz) / r)) 
+        else :
+            theta = 90
+
+        #finally defining all the function constants and values at the given dwell position, using the calculated r and theta values
         S_k = self.source_data.air_kerma_strength * 1e-6  
-        Lambda = self.source_data.dose_rate_constant  
+        Lambda = self.source_data.dose_rate_constant  #from used dataset
         G = self.geometry_function(r, theta)
         g = self.radial_dose_function(r) 
         F = self.anisotropy_function(r, theta)  
 
+        #final dose rate value
         dose_rate = S_k * Lambda * G * g * F * 1e6  
 
         return dose_rate
 
-class BrachytherapyPlan:
-    """Represents a complete brachytherapy treatment plan"""
+#the code above completes the discussion about the dosage calculation at one specified dwell position
+#to calculate dosage at every point we develop an entire treatment plan to go at various dwell positions for given dwell times
 
-    def __init__(self, dwell_positions: List[DwellPosition], dwell_times: List[float], 
-                 target_points: List[Tuple[float, float, float]], 
-                 oar_points: List[Tuple[float, float, float]] = None):
+class BrachytherapyPlan:
+    #Represents the complete current brachytherapy treatment plan
+
+    def __init__(self, dwell_positions: List[DwellPosition], dwell_times: List[float], target_points: List[Tuple[float, float, float]], oar_points: List[Tuple[float, float, float]] = None):
         self.dwell_positions = dwell_positions
         self.dwell_times = dwell_times 
         self.target_points = target_points 
         self.oar_points = oar_points or []  
 
-    def calculate_total_dose(self, calc_point: Tuple[float, float, float], 
-                           calculator: TG43DoseCalculator) -> float:
+    def calculate_total_dose(self, calc_point: Tuple[float, float, float], calculator: TG43DoseCalculator) -> float:
         """Calculate total dose at a point from all dwell positions"""
         total_dose = 0.0
 
@@ -116,7 +121,7 @@ class BrachytherapyPlan:
         return total_dose
 
 class BrachytherapyOptimizer:
-    """Optimization algorithms for brachytherapy treatment planning"""
+    #Optimization algorithms for brachytherapy treatment planning
 
     def __init__(self, calculator: TG43DoseCalculator, prescription_dose: float = 600.0):
         self.calculator = calculator
@@ -285,4 +290,5 @@ def main():
 
 if __name__ == "__main__":
     results = main()
+
 
