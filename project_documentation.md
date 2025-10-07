@@ -164,8 +164,9 @@ The achieved 69.5% reduction in organ-at-risk dose while maintaining 100% target
 ---
 
 **Project Statistics:**
-- **Lines of Code**: 400+ (with documentation)
+- **Lines of Code**: 290+ (with documentation)
 - **Data Points Generated**: 450+ (dose distributions, DVH, analysis)
 - **Optimization Variables**: 18 (dwell times)
 - **Convergence**: 7 iterations to global optimum
+
 - **Clinical Improvement**: 69.5% OAR dose reduction achieved
