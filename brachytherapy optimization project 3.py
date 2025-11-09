@@ -1,14 +1,10 @@
 """
-=============================================================================
-BRACHYTHERAPY DOSE PLANNING AND OPTIMIZATION SYSTEM
-=============================================================================
-This code implements HDR brachytherapy treatment planning using:
+brachytherapy treatment planning using:
   1. TG-43 dose calculation formalism (AAPM standard)
-  2. Linear Penalty Model (LPM) for multi-objective optimization
-  3. L2 regularization for smooth, stable dwell time solutions
-  4. 3D dose heatmap visualization
-  5. Synthetic clinical case generator for testing and validation
-=============================================================================
+  2. Linear Penalty Model for multi-objective optimization
+  3. L2 regularization for a smoother and stable dwell time solution
+  4. 3D dose and catheter placement heatmap visualization 
+  5. Synthetic case generator, as well as computed clinical case retriever for testing and validation
 """
 
 import numpy as np
@@ -18,19 +14,13 @@ from dataclasses import dataclass
 from typing import List, Tuple, Dict
 import matplotlib.pyplot as plt
 
-# =============================================================================
-# DATA STRUCTURES
-# =============================================================================
-
 @dataclass
 class DwellPosition:
     """
-    Represents a single dwell position where radioactive source can pause.
-    
-    Attributes:
-        x, y, z: 3D coordinates in millimeters
-        channel: Catheter/channel number (1, 2, 3, ...)
-        position_number: Sequential position index within the catheter
+    Gives a single dwell position where radioactive source can pause.
+        - x, y, z: 3D coordinates in mm
+        - channel: Catheter/channel number [1,2,3,...]
+        - position_number:  position index within the catheter
     """
     x: float
     y: float
@@ -55,43 +45,37 @@ class SourceData:
     radial_dose_function_data: Dict[float, float]
     anisotropy_function_data: Dict[float, float]
 
-
-# =============================================================================
-# TG-43 DOSE CALCULATION ENGINE
-# =============================================================================
-
 class TG43DoseCalculator:
     """
-    Implements AAPM TG-43 formalism for brachytherapy dose calculation.
+    TG-43 formaliser for brachytherapy dose calculator.
     
-    The TG-43 formula computes dose rate at any point from a source:
-        D_rate = S_k X Λ X G(r,θ) X g(r) X F(r,θ)
+    The TG-43 formula computes dose rate at any point from a source using the given formula:
+        D_rate = S_k * Λ * G(r,theta) * g(r) * F(r,theta)
     
     Where:
-        S_k = Air kerma strength
-        Λ = Dose rate constant
-        G(r,θ) = Geometry function
-        g(r) = Radial dose function
-        F(r,θ) = Anisotropy function
+        S_k = Air kerma strength : "is the air-kerma rate K˙δ(d), in vacuo, due to photons of energy greater than δ at a distance d, multiplied by the square of this distance, d2", courtesy https://oncologymedicalphysics.com/brachytherapy-dosimetry/
+        Λ = Dose rate constant :  "is the ratio of dose rate at the reference point, D˙(r_0,theta_0), to the air-kerma strength", courtesy https://oncologymedicalphysics.com/brachytherapy-dosimetry/
+        G(r,theta) = Geometry function : "accounts only for inverse square law, neglecting scatter and attenuation", courtesy https://oncologymedicalphysics.com/brachytherapy-dosimetry/
+        g(r) = Radial dose function : "accounts for dose fall off in the transverse plane due to photon scattering and attenuation", courtesy https://oncologymedicalphysics.com/brachytherapy-dosimetry/
+        F(r,theta) = Anisotropy function : "the anisotropy function represents dose distribution around the source and has a major role for characterization of any new source", courtesy https://www.researchgate.net/publication/355339610_Anisotropy_function_of_a_new_192-Ir_brachytherapy_source
     """
     
     def __init__(self, source_data: SourceData):
         """
         Initialize dose calculator with source-specific parameters.
-        
-        Args:
-            source_data: SourceData object containing TG-43 parameters
+        source_data: SourceData object containing TG-43 parameters
         """
         self.source_data = source_data
         self.setup_interpolators()
     
     def setup_interpolators(self):
         """
-        Creates interpolation functions for g(r) and F(theta).
+        Creates interpolation functions for g(r), radial dose function and F(theta), .
         
-        Uses linear interpolation with boundary extrapolation to provide
-        smooth dose estimation at any distance or angle.
+        Uses linear interpolation with boundary extrapolation to provide smooth dose estimation at any distance or angle.
+        utilized due to effectiveness in 1d interpolation.
         """
+      
         # Radial dose function g(r) interpolator
         r_values = np.array(list(self.source_data.radial_dose_function_data.keys()))
         g_values = np.array(list(self.source_data.radial_dose_function_data.values()))
@@ -103,16 +87,12 @@ class TG43DoseCalculator:
         # Anisotropy function F(theta) interpolator
         theta_values = np.array(list(self.source_data.anisotropy_function_data.keys()))
         f_values = np.array(list(self.source_data.anisotropy_function_data.values()))
-        self.anisotropy_interp = interp1d(
-            theta_values, f_values, kind='linear', bounds_error=False,
-            fill_value=(f_values[0], f_values[-1])
-        )
+        self.anisotropy_interp = interp1d(theta_values, f_values, kind='linear', bounds_error=False, fill_value=(f_values[0], f_values[-1]))
     
     def geometry_function(self, r: float, theta: float, L: float = 3.5) -> float:
         """
-        Compute geometry function G(r,θ) accounting for finite source length.
-        
-        Args:
+        Compute geometry function G(r,theta) accounting for finite source length.
+        Where: 
             r: Distance from source center (mm)
             theta: Polar angle from source axis (degrees)
             L: Active source length (mm), default 3.5mm for Ir-192
@@ -148,38 +128,34 @@ class TG43DoseCalculator:
     
     def anisotropy_function(self, r: float, theta: float) -> float:
         """
-        Get anisotropy function F(r,θ) at angle theta.
+        Get anisotropy function F(r,theta) at angle theta.
         
         Args:
             r: Distance from source (mm)
             theta: Polar angle (degrees)
-            
-        Returns:
-            F(theta) value accounting for angular dose variation
+        gives F(theta) value accounting for angular dose variation
         """
         theta = abs(theta) % 180  # Normalize angle
         return float(self.anisotropy_interp(theta))
     
-    def calculate_dose_rate(self, dwell_pos: DwellPosition, 
-                          calc_point: Tuple[float, float, float]) -> float:
+    def calculate_dose_rate(self, dwell_pos: DwellPosition, calc_point: Tuple[float, float, float]) -> float:
         """
         Calculate dose rate at a point from a single dwell position.
         
         Implements full TG-43 formalism with all correction factors.
         
-        Args:
+        Where: 
             dwell_pos: Source dwell position
             calc_point: (x, y, z) coordinates where dose is calculated (mm)
             
-        Returns:
-            Dose rate in cGy/hour
+        gives dose rate in cGy/hour
         """
         # Calculate distance and angle from source to point
         dx = calc_point[0] - dwell_pos.x
         dy = calc_point[1] - dwell_pos.y
         dz = calc_point[2] - dwell_pos.z
         
-        r = np.sqrt(dx*dx + dy*dy + dz*dz)  # Euclidean distance (mm)
+        r = np.sqrt(dx*dx + dy*dy + dz*dz)  # shortest distance (mm)
         
         # Avoid singularity very close to source
         if r < 2.0:
@@ -199,30 +175,20 @@ class TG43DoseCalculator:
         dose_rate = S_k * Lambda * G * g * F * 1e6
         return dose_rate
 
-
-# =============================================================================
-# TREATMENT PLAN CLASS
-# =============================================================================
-
+#Treatment plan class definition
 class BrachytherapyPlan:
     """
-    Represents a complete brachytherapy treatment plan.
-    
-    Contains:
+    Represents the complete brachytherapy treatment plan, for a given set of : 
         - Catheter geometry (dwell positions)
         - Source dwell times at each position
         - Target points (tumor volume)
         - OAR points (organs at risk)
     """
     
-    def __init__(self, dwell_positions: List[DwellPosition], 
-                 dwell_times: List[float],
-                 target_points: List[Tuple[float, float, float]], 
-                 oar_points: List[Tuple[float, float, float]] = None):
+    def __init__(self, dwell_positions: List[DwellPosition], dwell_times: List[float], target_points: List[Tuple[float, float, float]], oar_points: List[Tuple[float, float, float]] = None):
         """
-        Initialize treatment plan.
-        
-        Args:
+        treatment plan initializer
+        Where: 
             dwell_positions: List of DwellPosition objects
             dwell_times: List of dwell times in seconds
             target_points: List of (x,y,z) tumor sampling points
@@ -233,33 +199,26 @@ class BrachytherapyPlan:
         self.target_points = target_points
         self.oar_points = oar_points or []
     
-    def calculate_total_dose(self, calc_point: Tuple[float, float, float], 
-                           calculator: TG43DoseCalculator) -> float:
+    def calculate_total_dose(self, calc_point: Tuple[float, float, float], calculator: TG43DoseCalculator) -> float: 
         """
-        Calculate cumulative dose at a point from all dwell positions.
-        
-        Args:
+        Calculation of cumulative dose at a point from all providd dwell positions.
+        Where:
             calc_point: (x,y,z) coordinates (mm)
             calculator: TG43DoseCalculator instance
-            
-        Returns:
-            Total dose in cGy
+        
+        gives total dose in cGy
         """
         total_dose = 0.0
         
         for i, dwell_pos in enumerate(self.dwell_positions):
             if i < len(self.dwell_times) and self.dwell_times[i] > 0:
                 dose_rate = calculator.calculate_dose_rate(dwell_pos, calc_point)
+              
                 # Convert dose rate (cGy/h) to dose (cGy) using dwell time (sec)
                 dose = dose_rate * self.dwell_times[i] / 3600.0
                 total_dose += dose
         
         return total_dose
-
-
-# =============================================================================
-# OPTIMIZATION ENGINE (L2 REGULARIZED VERSION)
-# =============================================================================
 
 class BrachytherapyOptimizer:
     """
@@ -545,3 +504,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
