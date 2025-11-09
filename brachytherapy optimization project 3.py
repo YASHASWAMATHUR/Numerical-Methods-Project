@@ -222,29 +222,24 @@ class BrachytherapyPlan:
 
 class BrachytherapyOptimizer:
     """
-    Optimization engine for HDR brachytherapy treatment planning.
+    Optimization class for brachytherapy treatment planning.
     
-    KEY FEATURES:
+    Current Features:
     1. Linear Penalty Model (LPM) for multi-objective optimization
     2. L2 regularization for smooth, stable solutions
-    3. L-BFGS-B constrained optimization algorithm
+    3. L-BFGS-B constrained optimization algorithm (segmented)
     
-    DIFFERENCE FROM PREVIOUS VERSION:
-    - Previous: Hard penalty if dwell_time > 100 seconds
+    Changes from previous test:
     - Current (L2): Soft penalty on sum of squared dwell times
     
-    L2 Advantages:
-    - Smoother optimization landscape (better convergence)
-    - Prevents extreme dwell time values
-    - More mathematically principled regularization
-    - Tunable via regularization_weight parameter
+    Why L2 ? :
+    - Smoother optimization hence better convergence
+    - Prevents extreme dwell time values for extreme cases 
+    - regularization_weight parameter can be varied 
     """
     
     def __init__(self, calculator: TG43DoseCalculator, prescription_dose: float = 600.0):
         """
-        Initialize optimizer.
-        
-        Args:
             calculator: TG43DoseCalculator for dose computation
             prescription_dose: Target tumor dose in cGy
         """
@@ -253,35 +248,31 @@ class BrachytherapyOptimizer:
     
     def objective_function(self, dwell_times: np.ndarray, plan: BrachytherapyPlan) -> float:
         """
-        Objective function to minimize during optimization.
-        
-        Combines three penalty components:
+        Main function which has to be minimized (main target)  
+        Current weighting schemes, can be tested for various starting points (not done yet) 
         1. Target underdosing penalty (weight = 10.0)
         2. OAR overdosing penalty (weight = 5.0)
         3. L2 regularization penalty (weight = 0.01)
         
-        Args:
+        Where:
             dwell_times: Current dwell time vector (seconds)
             plan: BrachytherapyPlan object
             
-        Returns:
-            Total penalty value (lower = better plan)
+        gives total penalty value (lower = better plan)
         """
         plan.dwell_times = dwell_times.tolist()
         total_penalty = 0.0
         
-        # ===== 1. TARGET COVERAGE PENALTY =====
-        # Penalize points receiving less than prescription dose
+        # Penalize points receiving less than prescription dose (underdosing penalty)
         target_weight = 10.0
         for target_point in plan.target_points:
             dose = plan.calculate_total_dose(target_point, self.calculator)
             if dose < self.prescription_dose:
                 underdose = self.prescription_dose - dose
-                penalty = target_weight * (underdose ** 2)  # Quadratic penalty
+                penalty = target_weight * (underdose ** 2)  # Quadratic penalty (L2)
                 total_penalty += penalty
         
-        # ===== 2. OAR SPARING PENALTY =====
-        # Penalize points receiving more than 70% of prescription
+        # Penalize points receiving more than 70% of prescription (OAR overdosing penalty)
         oar_weight = 5.0
         oar_limit = self.prescription_dose * 0.7
         for oar_point in plan.oar_points:
@@ -291,32 +282,26 @@ class BrachytherapyOptimizer:
                 penalty = oar_weight * (overdose ** 2)  # Quadratic penalty
                 total_penalty += penalty
         
-        # ===== 3. L2 REGULARIZATION =====
-        # NEW IN THIS VERSION: Soft penalty on dwell time magnitude
-        # Previous version: Hard cutoff at 100 seconds
-        # Current version: Smooth penalty proportional to sum(dwell_times²)
+        # Soft penalty on dwell time magnitude (L2 regularizer penalty) 
+        # Instead of hard cutoff at 100 seconds, implementation of a smoother penalty which is proportional to sum(dwell_times²)
         regularization_weight = 0.01  # Small weight for soft constraint
         reg_term = np.sum(dwell_times ** 2)
         total_penalty += regularization_weight * reg_term
         
         return total_penalty
     
-    def optimize_ipsa_style(self, plan: BrachytherapyPlan, 
-                          max_iterations: int = 100) -> BrachytherapyPlan:
+    def optimize_ipsa_style(self, plan: BrachytherapyPlan, max_iterations: int = 100) -> BrachytherapyPlan:
         """
-        Run IPSA-style optimization to find optimal dwell times.
+        IPSA-style optimization to find optimal dwell times, while utilizing L-BFGS-B algorithm (Limited-memory Broyden-Fletcher-Goldfarb-Shanno Algorithm) which is efficient for large-scale constrained optimization.
         
-        Uses L-BFGS-B algorithm (Limited-memory Broyden-Fletcher-Goldfarb-Shanno)
-        which is efficient for large-scale constrained optimization.
-        
-        Args:
+        Where:
             plan: Initial treatment plan
             max_iterations: Maximum optimization iterations
             
-        Returns:
-            Optimized BrachytherapyPlan with improved dwell times
+        gives optimized BrachytherapyPlan with improved dwell times
         """
-        print(f"Starting IPSA-style optimization with {len(plan.dwell_positions)} dwell positions...")
+      
+        print(f"Starting optimizer with {len(plan.dwell_positions)} dwell positions: ")
         
         n_positions = len(plan.dwell_positions)
         initial_dwell_times = np.ones(n_positions) * 10.0  # Uniform 10 sec start
@@ -352,14 +337,13 @@ class BrachytherapyOptimizer:
         """
         Generate 3D dose distribution grid for visualization.
         
-        Args:
+        Where:
             plan: Treatment plan to evaluate
             calculator: TG43DoseCalculator instance
             grid_limits: ((x_min,x_max), (y_min,y_max), (z_min,z_max)) in mm
             resolution: Number of grid points per axis
             
-        Returns:
-            (xs, ys, zs, dose_grid): Coordinate arrays and 3D dose grid
+        gives heatmap
         """
         xs = np.linspace(grid_limits[0][0], grid_limits[0][1], resolution)
         ys = np.linspace(grid_limits[1][0], grid_limits[1][1], resolution)
@@ -375,16 +359,12 @@ class BrachytherapyOptimizer:
         
         return xs, ys, zs, dose_grid
 
-
-# =============================================================================
-# CLINICAL CASE GENERATOR
-# =============================================================================
-
+#sample data_set generator which simulates the taken dataset from ProstateX-Zone-Segmentation-Manifest
 def create_sample_clinical_case():
     """
     Generate synthetic prostate HDR brachytherapy case.
     
-    Creates:
+    Current scenario generator:
         - 2 parallel catheters (at x = -5 and x = +5 mm)
         - 9 dwell positions per catheter (z = -20 to +20 mm)
         - 11 target points (tumor sampling)
@@ -396,94 +376,67 @@ def create_sample_clinical_case():
     print("Generating synthetic prostate HDR brachytherapy case...")
     
     # Catheter 1: Left side (x = -5 mm)
-    catheter1_positions = [
-        DwellPosition(x=-5, y=0, z=z, channel=1, position_number=i)
-        for i, z in enumerate(range(-20, 21, 5))
-    ]
+    catheter1_positions = [DwellPosition(x=-5, y=0, z=z, channel=1, position_number=i) for i, z in enumerate(range(-20, 21, 5))]
     
     # Catheter 2: Right side (x = +5 mm)
-    catheter2_positions = [
-        DwellPosition(x=5, y=0, z=z, channel=2, position_number=i)
-        for i, z in enumerate(range(-20, 21, 5))
-    ]
+    catheter2_positions = [DwellPosition(x=5, y=0, z=z, channel=2, position_number=i) for i, z in enumerate(range(-20, 21, 5))]
     
     all_dwell_positions = catheter1_positions + catheter2_positions
     
     # Target points (tumor volume)
-    target_points = [
-        (0, 0, z) for z in range(-15, 16, 5)  # Central points
-    ] + [
-        (x, 0, 0) for x in [-10, -5, 5, 10]   # Lateral points
-    ]
+    target_points = [(0, 0, z) for z in range(-15, 16, 5)] + [(x, 0, 0) for x in [-10, -5, 5, 10]]
     
-    # OAR points (rectum and bladder)
-    oar_points = [
-        (-15, 0, z) for z in range(-10, 11, 5)  # Rectum (posterior)
-    ] + [
-        (0, 10, z) for z in range(-10, 11, 5)   # Bladder (anterior)
-    ]
+    # OAR points 
+    oar_points = [(-15, 0, z) for z in range(-10, 11, 5)] + [(0, 10, z) for z in range(-10, 11, 5)]
     
     return all_dwell_positions, target_points, oar_points
 
 
-# =============================================================================
-# MAIN PROGRAM
-# =============================================================================
-
 def main():
     """Main execution function."""
     
-    print("\n" + "="*70)
+    print("=============================================================================","\n")
     print("BRACHYTHERAPY DOSE PLANNING AND OPTIMIZATION")
-    print("="*70 + "\n")
+    print("=============================================================================","\n")
     
-    # ===== STEP 1: Initialize TG-43 source parameters =====
+    # Initialize TG-43 source parameters 
     ir192_source_data = SourceData(
         air_kerma_strength=40000,  # 40,000 U for new Ir-192 source
         dose_rate_constant=1.115,   # Standard for Ir-192
-        radial_dose_function_data={
+        radial_dose_function_data={ # CLRP (Caleton Laboratory for Radiotherapy Physics) generalized data 
             0.1: 1.000, 0.25: 1.000, 0.5: 0.994, 0.75: 0.987, 1.0: 0.979,
             1.5: 0.964, 2.0: 0.948, 2.5: 0.932, 3.0: 0.915, 4.0: 0.881,
             5.0: 0.847, 6.0: 0.813, 7.0: 0.779, 8.0: 0.746, 10.0: 0.683
         },
-        anisotropy_function_data={
+        anisotropy_function_data={ # CLRP (Caleton Laboratory for Radiotherapy Physics) generalized data 
             0: 0.70, 10: 0.77, 30: 0.94, 45: 0.97, 60: 0.99, 90: 1.00,
             120: 0.99, 135: 0.97, 150: 0.94, 170: 0.77, 180: 0.70
         }
     )
     
     calculator = TG43DoseCalculator(ir192_source_data)
-    print("✓ TG-43 dose calculator initialized")
+    print(" TG-43 dose calculator initialized")
     
-    # ===== STEP 2: Create clinical case =====
+    # Create clinical case 
     dwell_positions, target_points, oar_points = create_sample_clinical_case()
-    print(f"✓ Clinical case: {len(dwell_positions)} positions, "
+    print(f" Clinical case: {len(dwell_positions)} positions, "
           f"{len(target_points)} targets, {len(oar_points)} OARs\n")
     
-    # ===== STEP 3: Create initial plan =====
-    initial_plan = BrachytherapyPlan(
-        dwell_positions=dwell_positions,
-        dwell_times=[15.0] * len(dwell_positions),  # Uniform 15 sec
-        target_points=target_points,
-        oar_points=oar_points
-    )
+    # Create initial plan 
+    initial_plan = BrachytherapyPlan(dwell_positions=dwell_positions, dwell_times=[15.0] * len(dwell_positions), target_points=target_points, oar_points=oar_points)
     
-    # ===== STEP 4: Run optimization =====
+    # Run optimizer 
     optimizer = BrachytherapyOptimizer(calculator, prescription_dose=600.0)
-    optimized_plan = optimizer.optimize_ipsa_style(initial_plan, max_iterations=50)
+    optimized_plan = optimizer.optimize_ipsa_style(initial_plan, max_iterations=50) # number of max_iterations can be varied for various values
     
-    # ===== STEP 5: Generate and visualize heatmap =====
+    # Generate and visualize heatmap 
     print("\nGenerating dose heatmap...")
-    xs, ys, zs, dose_grid = optimizer.generate_dose_heatmap(
-        optimized_plan, calculator, resolution=20
-    )
+    xs, ys, zs, dose_grid = optimizer.generate_dose_heatmap(optimized_plan, calculator, resolution=20)
     
     # Plot central slice (z = 0 mm)
     mid_z = len(zs) // 2
     plt.figure(figsize=(10, 8))
-    plt.imshow(dose_grid[:, :, mid_z], 
-               extent=(xs[0], xs[-1], ys[0], ys[-1]), 
-               origin='lower', cmap='hot')
+    plt.imshow(dose_grid[:, :, mid_z], extent=(xs[0], xs[-1], ys[0], ys[-1]), origin='lower', cmap='hot')
     plt.colorbar(label='Dose (cGy)', shrink=0.8)
     plt.title('Optimized Dose Heatmap Slice at z=0 mm', fontsize=14, fontweight='bold')
     plt.xlabel('X (mm)', fontsize=12)
@@ -491,8 +444,7 @@ def main():
     
     # Overlay catheter positions
     catheter_x = [-5, 5]  # x-coordinates of catheters
-    plt.scatter(catheter_x, [0, 0], c='cyan', marker='x', s=200, 
-                linewidths=3, label='Catheter positions')
+    plt.scatter(catheter_x, [0, 0], c='cyan', marker='x', s=200, linewidths=3, label='Catheter positions')
     plt.legend(loc='upper right')
     plt.tight_layout()
     plt.show()
@@ -504,4 +456,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
