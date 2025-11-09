@@ -309,7 +309,7 @@ class BrachytherapyOptimizer:
         # Box constraints: 0 ≤ dwell_time ≤ 100 seconds
         bounds = [(0.0, 100.0) for _ in range(n_positions)]
         
-        # Run optimization
+        # Run optimisation
         result = minimize(
             fun=self.objective_function,
             x0=initial_dwell_times,
@@ -433,7 +433,7 @@ def main():
     print("\nGenerating dose heatmap...")
     xs, ys, zs, dose_grid = optimizer.generate_dose_heatmap(optimized_plan, calculator, resolution=20)
     
-    # Plot central slice (z = 0 mm)
+    # Plot central slice(z = 0 mm)
     mid_z = len(zs) // 2
     plt.figure(figsize=(10, 8))
     plt.imshow(dose_grid[:, :, mid_z], extent=(xs[0], xs[-1], ys[0], ys[-1]), origin='lower', cmap='hot')
@@ -456,5 +456,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
